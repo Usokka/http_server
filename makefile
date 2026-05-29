@@ -27,3 +27,6 @@ fclean: clean
 init:
 	mkdir -p www
 	echo "<h1>Bienvenue sur C-Web</h1><p>Serveur ecrit en C !</p>" > www/index.html
+	
+test: all init
+	python3 test_server.py
