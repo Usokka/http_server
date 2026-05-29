@@ -163,16 +163,19 @@ void start_server(int port) {
 
       } else {
         int client_sock = events[n].data.fd;
-        handle_http_request(client_sock);
-
-        /*
-            Après avoir traité la requête, on ferme la connexion
-            epoll_ctl : retirer le client de l'instance epoll pour ne plus
-           surveiller les événements sur cette socket close : fermer la socket
-           du client pour libérer les ressources
-        */
-        epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_sock, NULL);
-        close(client_sock);
+        
+        // On délègue et on vérifie si le traitement de la requête est terminé
+        if (handle_http_request(client_sock) == 1) {
+          /*
+              Après avoir traité complètement la requête, on ferme la connexion
+              epoll_ctl : retirer le client de l'instance epoll
+              close : fermer la socket du client pour libérer les ressources
+          */
+          epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_sock, NULL);
+          close(client_sock);
+        }
+        // Si handle_http_request retourne 0, on ne fait rien ! 
+        // La socket reste enregistrée dans epoll pour la suite.
       }
     }
   }

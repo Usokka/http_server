@@ -3,24 +3,28 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>       // Indispensable pour PATH_MAX
+#include <sys/sendfile.h> // Indispensable pour sendfile()
 
 #include "http.h"
 
 #define BUFFER_SIZE 4096
 #define WEB_ROOT "./www"
 
+// Gestion de la macro de secours si PATH_MAX fait de la résistance
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
 // Fonction utilitaire pour déterminer le type MIME
 const char *get_mime_type(const char *filepath) {
-  if (strstr(filepath, ".html"))
-    return "text/html";
-  if (strstr(filepath, ".css"))
-    return "text/css";
-  if (strstr(filepath, ".js"))
-    return "application/javascript";
-  if (strstr(filepath, ".png"))
-    return "image/png";
-  if (strstr(filepath, ".jpg") || strstr(filepath, ".jpeg"))
-    return "image/jpeg";
+  if (strstr(filepath, ".html")) return "text/html";
+  if (strstr(filepath, ".css"))  return "text/css";
+  if (strstr(filepath, ".js"))   return "application/javascript";
+  if (strstr(filepath, ".png"))  return "image/png";
+  if (strstr(filepath, ".jpg") || strstr(filepath, ".jpeg")) return "image/jpeg";
   return "text/plain";
 }
 
@@ -36,21 +40,43 @@ void send_404(int client_sock) {
   write(client_sock, response, strlen(response));
 }
 
-void handle_http_request(int client_sock) {
+int handle_http_request(int client_sock) {
   char buffer[BUFFER_SIZE];
-  int bytes_read = read(client_sock, buffer, BUFFER_SIZE - 1);
+  int total_read = 0;
 
-  if (bytes_read <= 0)
-    return; // Erreur ou déconnexion
+  // 1. BOUCLE DE LECTURE NON-BLOQUANTE (Impératif avec epoll EPOLLET)
+  while (1) {
+    // On lit à la suite du buffer pour accumuler les morceaux de requêtes
+    int bytes_read = read(client_sock, buffer + total_read, BUFFER_SIZE - total_read - 1);
 
-  buffer[bytes_read] = '\0'; // Sécurisation de la chaîne
+    if (bytes_read > 0) {
+      total_read += bytes_read;
+      buffer[total_read] = '\0'; // On garde la chaîne propre pour strstr
+
+      // Est-ce qu'on a reçu la fin de la requête HTTP (\r\n\r\n) ?
+      if (strstr(buffer, "\r\n\r\n")) {
+        break; // Requête complète !
+      }
+    } 
+    else if (bytes_read == -1) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        // L'OS n'a plus de données pour l'instant et la requête n'a pas encore son \r\n\r\n.
+        // On retourne 0 pour garder la socket ouverte dans epoll.
+        return 0; 
+      }
+      return 1; // Une vraie erreur réseau, on demande la fermeture
+    } 
+    else {
+      return 1; // bytes_read == 0 -> Le client s'est déconnecté
+    }
+  }
 
   // Variables pour parser la ligne de requête HTTP
   char method[16], path[256], protocol[16];
 
-  // Parsing simpliste (L3 style) via sscanf
+  // Parsing sécurisé via sscanf
   if (sscanf(buffer, "%15s %255s %15s", method, path, protocol) != 3) {
-    return; // Requête malformée
+    return 1; // Requête malformée, on coupe
   }
 
   printf("[LOG] Requete recue : %s %s\n", method, path);
@@ -59,7 +85,7 @@ void handle_http_request(int client_sock) {
   if (strcmp(method, "GET") != 0) {
     const char *response = "HTTP/1.1 501 Not Implemented\r\n\r\n";
     write(client_sock, response, strlen(response));
-    return;
+    return 1;
   }
 
   // Gestion de l'index par défaut
@@ -67,29 +93,39 @@ void handle_http_request(int client_sock) {
     strcpy(path, "/index.html");
   }
 
-  // Sécurisation basique : empêcher la remontée de répertoire (directory
-  // traversal)
-  if (strstr(path, "..")) {
+  // 2. SÉCURISATION ABSOLUE DU CHEMIN (Anti-Directory Traversal avec realpath)
+  char requested_filepath[512];
+  snprintf(requested_filepath, sizeof(requested_filepath), "%s%s", WEB_ROOT, path);
+
+  char resolved_base[PATH_MAX];
+  char resolved_file[PATH_MAX];
+
+  // Résolution des chemins absolus (supprime les .., les liens symboliques et décode les caractères)
+  if (realpath(WEB_ROOT, resolved_base) == NULL || 
+      realpath(requested_filepath, resolved_file) == NULL) {
     send_404(client_sock);
-    return;
+    return 1;
   }
 
-  // Construction du chemin final (ex: ./www/index.html)
-  char filepath[512];
-  snprintf(filepath, sizeof(filepath), "%s%s", WEB_ROOT, path);
+  // On vérifie strictement que le fichier demandé est confiné dans le sous-répertoire de www
+  if (strncmp(resolved_file, resolved_base, strlen(resolved_base)) != 0) {
+    printf("[WARNING] Tentative de Directory Traversal interceptée ! Path: %s\n", path);
+    send_404(client_sock);
+    return 1;
+  }
 
-  // Vérification de l'existence du fichier
+  // Vérification de l'existence du fichier et validation que c'est un fichier régulier (pas un dossier)
   struct stat st;
-  if (stat(filepath, &st) == -1) {
+  if (stat(resolved_file, &st) == -1 || !S_ISREG(st.st_mode)) {
     send_404(client_sock);
-    return;
+    return 1;
   }
 
-  // Lecture et envoi du fichier
-  FILE *file = fopen(filepath, "rb");
-  if (!file) {
+  // Ouverture du fichier en mode descripteur brut pour sendfile
+  int file_fd = open(resolved_file, O_RDONLY);
+  if (file_fd == -1) {
     send_404(client_sock);
-    return;
+    return 1;
   }
 
   // Envoi des en-têtes HTTP
@@ -100,16 +136,14 @@ void handle_http_request(int client_sock) {
            "Content-Length: %ld\r\n"
            "Connection: close\r\n"
            "\r\n",
-           get_mime_type(filepath), st.st_size);
+           get_mime_type(resolved_file), st.st_size);
 
   write(client_sock, header_buffer, strlen(header_buffer));
 
-  // Envoi du corps du fichier par morceaux (chunks)
-  char file_buffer[1024];
-  size_t n;
-  while ((n = fread(file_buffer, 1, sizeof(file_buffer), file)) > 0) {
-    write(client_sock, file_buffer, n);
-  }
+  // 3. ENVOI OPTIMISÉ VIA LE NOYAU LINUX (sendfile)
+  off_t offset = 0;
+  sendfile(client_sock, file_fd, &offset, st.st_size);
 
-  fclose(file);
+  close(file_fd);
+  return 1; // Traitement complet terminé, on signale qu'on peut fermer
 }
