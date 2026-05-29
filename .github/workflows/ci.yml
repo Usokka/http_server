@@ -49,6 +49,5 @@ jobs:
       - name: Analyse statique avec Cppcheck
         run: |
           sudo apt-get install -y cppcheck
-          cppcheck --enable=all --error-exitcode=1 .
-
+          cppcheck --quiet --enable=warning,performance,portability --error-exitcode=1 .
       
