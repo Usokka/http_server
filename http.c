@@ -1,18 +1,18 @@
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>      // Indispensable pour PATH_MAX
+#include <netinet/in.h>  // Indispensable pour IPPROTO_TCP
+#include <netinet/tcp.h> // Indispensable pour TCP_CORK
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <limits.h>       // Indispensable pour PATH_MAX
 #include <sys/sendfile.h> // Indispensable pour sendfile()
-#include <netinet/tcp.h>  // Indispensable pour TCP_CORK
-#include <netinet/in.h>   // Indispensable pour IPPROTO_TCP
-#include <time.h>         // Indispensable pour nanosleep()
+#include <sys/stat.h>
+#include <time.h> // Indispensable pour nanosleep()
+#include <unistd.h>
 
 #include "http.h"
-#include "server.h"       // Indispensable pour la structure ClientContext
+#include "server.h" // Indispensable pour la structure ClientContext
 
 #define WEB_ROOT "./www"
 
@@ -23,11 +23,16 @@
 
 // Fonction utilitaire pour déterminer le type MIME
 const char *get_mime_type(const char *filepath) {
-  if (strstr(filepath, ".html")) return "text/html";
-  if (strstr(filepath, ".css"))  return "text/css";
-  if (strstr(filepath, ".js"))   return "application/javascript";
-  if (strstr(filepath, ".png"))  return "image/png";
-  if (strstr(filepath, ".jpg") || strstr(filepath, ".jpeg")) return "image/jpeg";
+  if (strstr(filepath, ".html"))
+    return "text/html";
+  if (strstr(filepath, ".css"))
+    return "text/css";
+  if (strstr(filepath, ".js"))
+    return "application/javascript";
+  if (strstr(filepath, ".png"))
+    return "image/png";
+  if (strstr(filepath, ".jpg") || strstr(filepath, ".jpeg"))
+    return "image/jpeg";
   return "text/plain";
 }
 
@@ -46,11 +51,14 @@ void send_404(int client_fd) {
 int handle_http_request(ClientContext *client) {
   // 1. BOUCLE DE LECTURE NON-BLOQUANTE (Impératif avec epoll EPOLLET)
   while (1) {
-    // Sécurité anti-overflow : si le buffer est plein et qu'on n'a toujours pas de \r\n\r\n
+    // Sécurité anti-overflow : si le buffer est plein et qu'on n'a toujours pas
+    // de \r\n\r\n
     if (client->total_read >= BUFFER_SIZE - 1) {
-      printf("[WARNING] Requete trop grande, rejet (Buffer Overflow Protection)\n");
-      
-      // VIDANGE : On lit et on jette le reste des données pour éviter un paquet TCP RST
+      printf("[WARNING] Requete trop grande, rejet (Buffer Overflow "
+             "Protection)\n");
+
+      // VIDANGE : On lit et on jette le reste des données pour éviter un paquet
+      // TCP RST
       char trash[512];
       while (read(client->fd, trash, sizeof(trash)) > 0) {
         // On consomme activement le flux résiduel
@@ -69,21 +77,21 @@ int handle_http_request(ClientContext *client) {
       if (strstr(client->read_buf, "\r\n\r\n")) {
         break; // Requête enfin complète, on sort pour la traiter !
       }
-    } 
-    else if (bytes_read == -1) {
+    } else if (bytes_read == -1) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        return 0; // Le tampon de l'OS est vide, on attend le prochain signal epoll
+        return 0; // Le tampon de l'OS est vide, on attend le prochain signal
+                  // epoll
       }
       return 1; // Vraie erreur réseau, on demande la fermeture
-    } 
-    else {
+    } else {
       return 1; // Le client s'est déconnecté proprement
     }
   }
 
   // 2. PARSING DE LA REQUÊTE ACCUMULÉE
   char method[16], path[256], protocol[16];
-  if (sscanf(client->read_buf, "%15s %255s %15s", method, path, protocol) != 3) {
+  if (sscanf(client->read_buf, "%15s %255s %15s", method, path, protocol) !=
+      3) {
     return 1; // Requête malformée
   }
 
@@ -103,7 +111,8 @@ int handle_http_request(ClientContext *client) {
 
   // 3. SÉCURISATION ABSOLUE DU CHEMIN (Anti-Directory Traversal avec realpath)
   char requested_filepath[512];
-  snprintf(requested_filepath, sizeof(requested_filepath), "%s%s", WEB_ROOT, path);
+  snprintf(requested_filepath, sizeof(requested_filepath), "%s%s", WEB_ROOT,
+           path);
 
   char resolved_base[PATH_MAX];
   char resolved_file[PATH_MAX];
@@ -117,12 +126,15 @@ int handle_http_request(ClientContext *client) {
 
   // Vérification stricte de confinement dans le dossier WEB_ROOT
   if (strncmp(resolved_file, resolved_base, strlen(resolved_base)) != 0) {
-    printf("[WARNING] Tentative de Directory Traversal interceptée ! Path: %s\n", path);
+    printf(
+        "[WARNING] Tentative de Directory Traversal interceptée ! Path: %s\n",
+        path);
     send_404(client->fd);
     return 1;
   }
 
-  // Vérification de l'existence et validation que c'est bien un fichier (pas un dossier)
+  // Vérification de l'existence et validation que c'est bien un fichier (pas un
+  // dossier)
   struct stat st;
   if (stat(resolved_file, &st) == -1 || !S_ISREG(st.st_mode)) {
     send_404(client->fd);
@@ -182,5 +194,6 @@ int handle_http_request(ClientContext *client) {
   cork = 0;
   setsockopt(client->fd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork));
 
-  return 1; // Traitement complet terminé, on ferme la socket et free le contexte
+  return 1; // Traitement complet terminé, on ferme la socket et free le
+            // contexte
 }

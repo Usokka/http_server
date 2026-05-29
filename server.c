@@ -84,15 +84,17 @@ void start_server(int port) {
     }
 
     for (int n = 0; n < nfds; ++n) {
-      
-      // On teste d'abord de manière sûre si l'événement provient de la socket d'écoute.
-      // C'est valide car on a configuré l'événement de listen_sock avec data.fd.
+
+      // On teste d'abord de manière sûre si l'événement provient de la socket
+      // d'écoute. C'est valide car on a configuré l'événement de listen_sock
+      // avec data.fd.
       if (events[n].data.fd == listen_sock) {
         // Nouvelle connexion entrante
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
 
-        int client_sock = accept(listen_sock, (struct sockaddr *)&client_addr, &client_len);
+        int client_sock =
+            accept(listen_sock, (struct sockaddr *)&client_addr, &client_len);
         if (client_sock < 0) {
           perror("Erreur accept");
           continue;
@@ -111,14 +113,15 @@ void start_server(int port) {
           close(client_sock);
           continue;
         }
-        
+
         client->fd = client_sock;
         client->total_read = 0;
         memset(client->read_buf, 0, BUFFER_SIZE);
 
-        // Enregistrement du client sous forme de pointeur d'événement (data.ptr)
+        // Enregistrement du client sous forme de pointeur d'événement
+        // (data.ptr)
         ev.events = EPOLLIN | EPOLLET;
-        ev.data.ptr = client; 
+        ev.data.ptr = client;
         if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_sock, &ev) < 0) {
           perror("Erreur epoll_ctl: ADD client");
           free(client);
@@ -129,15 +132,17 @@ void start_server(int port) {
         // Un client existant a envoyé des données (Edge-Triggered)
         // On récupère de manière sûre l'adresse du contexte via data.ptr
         ClientContext *client = (ClientContext *)events[n].data.ptr;
-        
+
         if (handle_http_request(client) == 1) {
-          // Si la requête est complètement traitée (retour 1), on nettoie tout proprement
+          // Si la requête est complètement traitée (retour 1), on nettoie tout
+          // proprement
           epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->fd, NULL);
           close(client->fd);
-          free(client); 
+          free(client);
         }
-        // Si handle_http_request renvoie 0, c'est que le tampon OS est vide (EAGAIN),
-        // on conserve le contexte intact et on attend le prochain cycle epoll.
+        // Si handle_http_request renvoie 0, c'est que le tampon OS est vide
+        // (EAGAIN), on conserve le contexte intact et on attend le prochain
+        // cycle epoll.
       }
     }
   }
