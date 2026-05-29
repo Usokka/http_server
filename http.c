@@ -1,12 +1,12 @@
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h> // Indispensable pour PATH_MAX
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sendfile.h> // Indispensable pour sendfile()
 #include <sys/stat.h>
 #include <unistd.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <limits.h>       // Indispensable pour PATH_MAX
-#include <sys/sendfile.h> // Indispensable pour sendfile()
 
 #include "http.h"
 
@@ -20,11 +20,16 @@
 
 // Fonction utilitaire pour déterminer le type MIME
 const char *get_mime_type(const char *filepath) {
-  if (strstr(filepath, ".html")) return "text/html";
-  if (strstr(filepath, ".css"))  return "text/css";
-  if (strstr(filepath, ".js"))   return "application/javascript";
-  if (strstr(filepath, ".png"))  return "image/png";
-  if (strstr(filepath, ".jpg") || strstr(filepath, ".jpeg")) return "image/jpeg";
+  if (strstr(filepath, ".html"))
+    return "text/html";
+  if (strstr(filepath, ".css"))
+    return "text/css";
+  if (strstr(filepath, ".js"))
+    return "application/javascript";
+  if (strstr(filepath, ".png"))
+    return "image/png";
+  if (strstr(filepath, ".jpg") || strstr(filepath, ".jpeg"))
+    return "image/jpeg";
   return "text/plain";
 }
 
@@ -47,7 +52,8 @@ int handle_http_request(int client_sock) {
   // 1. BOUCLE DE LECTURE NON-BLOQUANTE (Impératif avec epoll EPOLLET)
   while (1) {
     // On lit à la suite du buffer pour accumuler les morceaux de requêtes
-    int bytes_read = read(client_sock, buffer + total_read, BUFFER_SIZE - total_read - 1);
+    int bytes_read =
+        read(client_sock, buffer + total_read, BUFFER_SIZE - total_read - 1);
 
     if (bytes_read > 0) {
       total_read += bytes_read;
@@ -57,16 +63,14 @@ int handle_http_request(int client_sock) {
       if (strstr(buffer, "\r\n\r\n")) {
         break; // Requête complète !
       }
-    } 
-    else if (bytes_read == -1) {
+    } else if (bytes_read == -1) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        // L'OS n'a plus de données pour l'instant et la requête n'a pas encore son \r\n\r\n.
-        // On retourne 0 pour garder la socket ouverte dans epoll.
-        return 0; 
+        // L'OS n'a plus de données pour l'instant et la requête n'a pas encore
+        // son \r\n\r\n. On retourne 0 pour garder la socket ouverte dans epoll.
+        return 0;
       }
       return 1; // Une vraie erreur réseau, on demande la fermeture
-    } 
-    else {
+    } else {
       return 1; // bytes_read == 0 -> Le client s'est déconnecté
     }
   }
@@ -95,26 +99,32 @@ int handle_http_request(int client_sock) {
 
   // 2. SÉCURISATION ABSOLUE DU CHEMIN (Anti-Directory Traversal avec realpath)
   char requested_filepath[512];
-  snprintf(requested_filepath, sizeof(requested_filepath), "%s%s", WEB_ROOT, path);
+  snprintf(requested_filepath, sizeof(requested_filepath), "%s%s", WEB_ROOT,
+           path);
 
   char resolved_base[PATH_MAX];
   char resolved_file[PATH_MAX];
 
-  // Résolution des chemins absolus (supprime les .., les liens symboliques et décode les caractères)
-  if (realpath(WEB_ROOT, resolved_base) == NULL || 
+  // Résolution des chemins absolus (supprime les .., les liens symboliques et
+  // décode les caractères)
+  if (realpath(WEB_ROOT, resolved_base) == NULL ||
       realpath(requested_filepath, resolved_file) == NULL) {
     send_404(client_sock);
     return 1;
   }
 
-  // On vérifie strictement que le fichier demandé est confiné dans le sous-répertoire de www
+  // On vérifie strictement que le fichier demandé est confiné dans le
+  // sous-répertoire de www
   if (strncmp(resolved_file, resolved_base, strlen(resolved_base)) != 0) {
-    printf("[WARNING] Tentative de Directory Traversal interceptée ! Path: %s\n", path);
+    printf(
+        "[WARNING] Tentative de Directory Traversal interceptée ! Path: %s\n",
+        path);
     send_404(client_sock);
     return 1;
   }
 
-  // Vérification de l'existence du fichier et validation que c'est un fichier régulier (pas un dossier)
+  // Vérification de l'existence du fichier et validation que c'est un fichier
+  // régulier (pas un dossier)
   struct stat st;
   if (stat(resolved_file, &st) == -1 || !S_ISREG(st.st_mode)) {
     send_404(client_sock);

@@ -163,7 +163,7 @@ void start_server(int port) {
 
       } else {
         int client_sock = events[n].data.fd;
-        
+
         // On délègue et on vérifie si le traitement de la requête est terminé
         if (handle_http_request(client_sock) == 1) {
           /*
@@ -174,7 +174,7 @@ void start_server(int port) {
           epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_sock, NULL);
           close(client_sock);
         }
-        // Si handle_http_request retourne 0, on ne fait rien ! 
+        // Si handle_http_request retourne 0, on ne fait rien !
         // La socket reste enregistrée dans epoll pour la suite.
       }
     }
